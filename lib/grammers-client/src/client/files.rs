@@ -17,6 +17,7 @@ use tokio::{
     io::{self, AsyncRead, AsyncReadExt},
     sync::Mutex as AsyncMutex,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "fs")]
 use {
@@ -34,6 +35,9 @@ pub const MAX_CHUNK_SIZE: i32 = 512 * 1024;
 const FILE_MIGRATE_ERROR: i32 = 303;
 const BIG_FILE_SIZE: usize = 10 * 1024 * 1024;
 const WORKER_COUNT: usize = 4;
+
+/// Progress callback for downloads
+pub type DownloadProgress = Box<dyn Fn(u64, u64) + Send + 'static>;
 
 pub struct DownloadIter {
     client: Client,
@@ -212,7 +216,7 @@ impl Client {
             if let Media::Document(document) = media {
                 if document.size() as usize > BIG_FILE_SIZE {
                     return self
-                        .download_media_concurrent(media, path, WORKER_COUNT)
+                        .download_media_concurrent(media, path, WORKER_COUNT, None)
                         .await;
                 }
             }
@@ -266,6 +270,7 @@ impl Client {
         media: &Media,
         path: P,
         workers: usize,
+        progress: Option<DownloadProgress>,
     ) -> Result<(), io::Error> {
         let document = match media {
             Media::Document(document) => document,
@@ -273,10 +278,14 @@ impl Client {
         };
         let size = document.size();
         let location = media.to_raw_input_location().unwrap();
+        
         // Allocate
         let mut file = fs::File::create(path).await?;
         file.set_len(size as u64).await?;
         file.seek(SeekFrom::Start(0)).await?;
+
+        // Track downloaded bytes
+        let downloaded = Arc::new(AtomicU64::new(0));
 
         // Start workers
         let (tx, mut rx) = unbounded_channel();
@@ -287,6 +296,7 @@ impl Client {
             let tx = tx.clone();
             let part_index = part_index.clone();
             let client = self.clone();
+            let downloaded = downloaded.clone();
             let task = tokio::task::spawn(async move {
                 let mut retry_offset = None;
                 let mut dc = None;
@@ -319,7 +329,9 @@ impl Client {
                     };
                     match res {
                         Ok(tl::enums::upload::File::File(file)) => {
+                            let bytes_len = file.bytes.len() as u64;
                             tx.send((offset as u64, file.bytes)).unwrap();
+                            downloaded.fetch_add(bytes_len, Ordering::SeqCst);
                         }
                         Ok(tl::enums::upload::File::CdnRedirect(_)) => {
                             panic!(
@@ -343,7 +355,7 @@ impl Client {
         }
         drop(tx);
 
-        // File write loop
+        // File write loop with progress updates
         let mut pos = 0;
         while let Some((offset, data)) = rx.recv().await {
             if offset != pos {
@@ -351,14 +363,64 @@ impl Client {
             }
             file.write_all(&data).await?;
             pos = offset + data.len() as u64;
+            
+            if let Some(progress) = &progress {
+                progress(downloaded.load(Ordering::SeqCst), size as u64);
+            }
         }
 
-        // Check if all tasks finished succesfully
+        // Check if all tasks finished successfully
         for task in tasks {
             task.await?
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         }
         Ok(())
+    }
+
+    /// Downloads a media file into the specified path with optional progress callback.
+    #[cfg(feature = "fs")]
+    pub async fn download_media_with_progress<P: AsRef<Path>>(
+        &self,
+        downloadable: &Downloadable,
+        path: P,
+        progress: Option<DownloadProgress>,
+    ) -> Result<(), io::Error> {
+        // Concurrent downloader for large files
+        if let Downloadable::Media(media) = downloadable {
+            if let Media::Document(document) = media {
+                if document.size() as usize > BIG_FILE_SIZE {
+                    return self
+                        .download_media_concurrent(media, path, WORKER_COUNT, progress)
+                        .await;
+                }
+            }
+        }
+
+        if downloadable.to_raw_input_location().is_none() {
+            let data = match downloadable {
+                Downloadable::PhotoSize(photo_size)
+                    if !matches!(photo_size, PhotoSize::Size(_) | PhotoSize::Progressive(_)) =>
+                {
+                    photo_size.data()
+                }
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "media not downloadable",
+                    ));
+                }
+            };
+
+            if !data.is_empty() {
+                let mut file = fs::File::create(&path).await.unwrap();
+                file.write_all(&data).await.unwrap();
+            }
+
+            return Ok(());
+        }
+
+        let mut download = self.iter_download(downloadable);
+        Client::load(path, &mut download).await
     }
 
     /// Uploads an async stream to Telegram servers.
