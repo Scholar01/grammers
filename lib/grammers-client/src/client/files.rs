@@ -210,13 +210,14 @@ impl Client {
         &self,
         downloadable: &Downloadable,
         path: P,
+        workers: usize,
     ) -> Result<(), io::Error> {
         // Concurrent downloader
         if let Downloadable::Media(media) = downloadable {
             if let Media::Document(document) = media {
                 if document.size() as usize > BIG_FILE_SIZE {
                     return self
-                        .download_media_concurrent(media, path, WORKER_COUNT, None)
+                        .download_media_concurrent(media, path, workers, None)
                         .await;
                 }
             }
@@ -383,6 +384,7 @@ impl Client {
         &self,
         downloadable: &Downloadable,
         path: P,
+        workers: usize,
         progress: Option<DownloadProgress>,
     ) -> Result<(), io::Error> {
         // Concurrent downloader for large files
@@ -390,7 +392,7 @@ impl Client {
             if let Media::Document(document) = media {
                 if document.size() as usize > BIG_FILE_SIZE {
                     return self
-                        .download_media_concurrent(media, path, WORKER_COUNT, progress)
+                        .download_media_concurrent(media, path, workers, progress)
                         .await;
                 }
             }
