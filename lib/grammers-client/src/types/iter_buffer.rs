@@ -83,7 +83,7 @@ impl<R, T> IterBuffer<R, T> {
 
     /// Pop a buffered item from the queue, and increment the amount of items fetched (returned).
     pub(crate) fn pop_item(&mut self) -> Option<T> {
-        if let Some(item) = self.buffer.pop_front() {
+        if let Some(item) = self.buffer.pop_back() {
             self.fetched += 1;
             Some(item)
         } else {
