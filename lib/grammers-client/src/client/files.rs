@@ -210,7 +210,6 @@ impl Client {
         &self,
         downloadable: &Downloadable,
         path: P,
-        workers: usize,
     ) -> Result<(), io::Error> {
         // Concurrent downloader
         if let Downloadable::Media(media) = downloadable {
