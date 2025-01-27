@@ -216,7 +216,7 @@ impl Client {
             if let Media::Document(document) = media {
                 if document.size() as usize > BIG_FILE_SIZE {
                     return self
-                        .download_media_concurrent(media, path, workers, None)
+                        .download_media_concurrent(media, path, WORKER_COUNT, None)
                         .await;
                 }
             }
