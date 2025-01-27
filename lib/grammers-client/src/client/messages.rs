@@ -220,6 +220,11 @@ impl MessageIter {
         self
     }
 
+    pub fn add_offset(mut self, offset: i32) -> Self {
+        self.request.add_offset = offset;
+        self
+    }
+
     /// Determines how many messages there are in total.
     ///
     /// This only performs a network call if `next` has not been called before.
