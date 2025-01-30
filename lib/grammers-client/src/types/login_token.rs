@@ -7,6 +7,6 @@
 // except according to those terms.
 
 pub struct LoginToken {
-    pub(crate) phone: String,
-    pub(crate) phone_code_hash: String,
+    pub phone: String,
+    pub phone_code_hash: String,
 }
